@@ -1,0 +1,9 @@
+torch>=2.0
+transformers>=4.30
+colbert-ai>=0.2.19
+datasets
+pytrec_eval_terrier
+numpy
+pandas
+matplotlib
+tqdm
