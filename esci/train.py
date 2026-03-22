@@ -52,6 +52,20 @@ def train(config: ESCIConfig, output_dir: str, max_steps: int = None, max_rows: 
     n_params = sum(p.numel() for pg in params for p in pg["params"])
     print(f"Trainable: {n_params:,} params | Steps: {total_steps}")
 
+    # Sample queries for periodic weight monitoring
+    MONITOR_QUERIES = [
+        "men's black leather jacket",
+        "women's running shoes size 8",
+        "red dress for wedding guest",
+    ]
+    monitor_encs = None
+    if model.weight_head is not None:
+        monitor_encs = [
+            tokenizer(q, return_tensors="pt", padding="max_length",
+                      truncation=True, max_length=config.query_maxlen)
+            for q in MONITOR_QUERIES
+        ]
+
     os.makedirs(output_dir, exist_ok=True)
     log = []
     step = 0
@@ -85,6 +99,25 @@ def train(config: ESCIConfig, output_dir: str, max_steps: int = None, max_rows: 
 
             log.append({"step": step, "loss": loss.item()})
             pbar.set_postfix(loss=f"{loss.item():.4f}")
+
+            # Periodic weight monitoring every 500 steps
+            if monitor_encs is not None and step % 500 == 0 and step > 0:
+                model.eval()
+                print(f"\n  [Step {step}] Weight check:")
+                with torch.no_grad():
+                    for q_text, enc in zip(MONITOR_QUERIES, monitor_encs):
+                        enc_d = {k: v.to(device) for k, v in enc.items()}
+                        _, mask, hidden = model.encode(enc_d["input_ids"], enc_d["attention_mask"])
+                        w = model.weight_head(hidden, mask)[0].cpu()
+                        tokens = tokenizer.convert_ids_to_tokens(enc_d["input_ids"][0])
+                        m = mask[0].cpu()
+                        parts = []
+                        for t, wi, mi in zip(tokens, w, m):
+                            if mi and t not in ("[CLS]", "[SEP]", "[PAD]"):
+                                parts.append(f"{t}={wi:.3f}")
+                        print(f"    {q_text[:40]:40s} → {', '.join(parts)}")
+                model.train()
+
             step += 1
             if max_steps and step >= max_steps:
                 break
