@@ -45,8 +45,12 @@ def run_diagnostics(model, config, output_dir, device="cpu"):
         def __init__(self, m, c):
             self.config = c
             self.weight_head = m.weight_head
+            self._model = m
         def encode(self, input_ids, attention_mask):
             return m.encode_query(input_ids, attention_mask)
+        def eval(self):
+            self._model.eval()
+            return self
 
     wrapper = S2Wrapper(model, config)
 
