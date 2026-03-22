@@ -20,8 +20,8 @@ def pairwise_softmax_loss(pos_scores, neg_scores):
 def weight_entropy(weights, mask):
     """Compute mean entropy of weight distributions. Higher = more spread out."""
     # weights: (B, L), mask: (B, L)
-    w = weights.clamp(min=1e-12) * mask.float()
-    entropy = -(w * w.log()).sum(dim=-1)  # (B,)
+    w = weights.clamp(min=1e-8)  # avoid log(0)
+    entropy = -(w * w.log() * mask.float()).sum(dim=-1)  # (B,)
     return entropy.mean()
 
 

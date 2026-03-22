@@ -2,9 +2,11 @@
 
 Loads Amazon Shopping Queries Dataset and creates training triples:
   - Query + Exact product (positive)
-  - Query + Irrelevant product (hard negative)
+  - Query + Substitute product (hard negative)
 
-Also tracks Substitute products for attribute-specific evaluation.
+Substitute negatives force the model to learn fine-grained attribute
+differences (gender, color, size) rather than trivial product-type distinctions.
+Falls back to Irrelevant negatives when no Substitutes are available.
 """
 import random
 from collections import defaultdict
@@ -37,13 +39,17 @@ class ESCITriplesDataset(Dataset):
                 queries[qid]["irrelevant"].append(title)
             queries[qid]["query"] = query_text
 
-        # Build triples: exact=positive, irrelevant=negative
+        # Build triples: exact=positive, substitute=hard negative (fallback to irrelevant)
         self.triples = []
         for qid, data in queries.items():
-            if not data["exact"] or not data["irrelevant"]:
+            if not data["exact"]:
+                continue
+            # Prefer substitute negatives (hard), fall back to irrelevant (easy)
+            neg_pool = data["substitute"] if data["substitute"] else data["irrelevant"]
+            if not neg_pool:
                 continue
             for pos in data["exact"]:
-                neg = random.choice(data["irrelevant"])
+                neg = random.choice(neg_pool)
                 self.triples.append((data["query"], pos, neg))
             if max_rows and len(self.triples) >= max_rows:
                 break
