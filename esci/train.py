@@ -74,6 +74,11 @@ def train(config: ESCIConfig, output_dir: str, max_steps: int = None, max_rows: 
             if max_steps and step >= max_steps:
                 break
 
+        # Save checkpoint per epoch
+        epoch_path = os.path.join(output_dir, f"model_epoch{epoch}.pt")
+        torch.save(model.state_dict(), epoch_path)
+        print(f"Checkpoint saved: {epoch_path}")
+
     # Save
     torch.save(model.state_dict(), os.path.join(output_dir, "model.pt"))
     if model.weight_head is not None:

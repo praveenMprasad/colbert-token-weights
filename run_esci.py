@@ -140,7 +140,7 @@ def run_eval(model, config, out, device, args):
 def main():
     parser = argparse.ArgumentParser(description="ESCI experiment")
     parser.add_argument("--run", required=True,
-                        choices=["baseline", "weighted", "eval", "all"])
+                        choices=["baseline", "weighted", "eval", "original", "all"])
     parser.add_argument("--norm", default="softmax", choices=["softmax", "sigmoid"])
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch_size", type=int, default=64)
@@ -156,6 +156,16 @@ def main():
 
     if args.run == "baseline":
         model, config, out = run_baseline(args)
+        run_eval(model, config, out, device, args)
+
+    elif args.run == "original":
+        print("=" * 60)
+        print("Original ColBERTv2 (no ESCI fine-tuning)")
+        print("=" * 60)
+        config = ESCIConfig(use_token_weights=False)
+        model = ColBERTESCI(config).to(device)
+        out = os.path.join(args.output_dir, "original")
+        os.makedirs(out, exist_ok=True)
         run_eval(model, config, out, device, args)
 
     elif args.run == "weighted":
@@ -180,6 +190,18 @@ def main():
         run_eval(model, config, out, device, args)
 
     elif args.run == "all":
+        # Run 0: Original ColBERTv2 (no fine-tuning)
+        print("=" * 60)
+        print("Run 0: Original ColBERTv2 (no ESCI fine-tuning)")
+        print("=" * 60)
+        orig_config = ESCIConfig(use_token_weights=False)
+        orig_model = ColBERTESCI(orig_config).to(device)
+        orig_out = os.path.join(args.output_dir, "original")
+        os.makedirs(orig_out, exist_ok=True)
+        orig_results = run_eval(orig_model, orig_config, orig_out, device, args)
+        del orig_model
+        torch.cuda.empty_cache()
+
         # Run 1: baseline
         b_model, b_config, b_out = run_baseline(args)
         b_results = run_eval(b_model, b_config, b_out, device, args)
@@ -195,10 +217,12 @@ def main():
         print(f"\n{'=' * 60}")
         print("ESCI Experiment Summary")
         print(f"{'=' * 60}")
-        print(f"  Baseline MRR@10:  {b_results['vanilla_mrr@10']:.4f}")
-        print(f"  Weighted MRR@10:  {w_results.get('weighted_mrr@10', 'N/A')}")
-        print(f"  Baseline NDCG@10: {b_results['vanilla_ndcg@10']:.4f}")
-        print(f"  Weighted NDCG@10: {w_results.get('weighted_ndcg@10', 'N/A')}")
+        print(f"  Original ColBERTv2 MRR@10: {orig_results['vanilla_mrr@10']:.4f}")
+        print(f"  Finetuned baseline MRR@10: {b_results['vanilla_mrr@10']:.4f}")
+        print(f"  Finetuned weighted MRR@10: {w_results.get('weighted_mrr@10', 'N/A')}")
+        print(f"  Original ColBERTv2 NDCG@10: {orig_results['vanilla_ndcg@10']:.4f}")
+        print(f"  Finetuned baseline NDCG@10: {b_results['vanilla_ndcg@10']:.4f}")
+        print(f"  Finetuned weighted NDCG@10: {w_results.get('weighted_ndcg@10', 'N/A')}")
 
 
 if __name__ == "__main__":
