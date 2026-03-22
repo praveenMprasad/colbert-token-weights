@@ -32,6 +32,7 @@ def train(config: ESCIConfig, output_dir: str, max_steps: int = None, max_rows: 
     print(f"Weights: {config.use_token_weights} ({config.weight_norm})")
     if config.use_token_weights:
         print(f"Entropy regularization: lambda={config.entropy_lambda}")
+        print(f"Softmax temperature: {config.softmax_temperature}")
 
     tokenizer = AutoTokenizer.from_pretrained(config.checkpoint)
     model = ColBERTESCI(config).to(device)
@@ -147,7 +148,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--max_rows", type=int, default=None)
-    parser.add_argument("--entropy_lambda", type=float, default=0.1)
+    parser.add_argument("--entropy_lambda", type=float, default=0.0)
+    parser.add_argument("--temperature", type=float, default=3.0)
     args = parser.parse_args()
 
     config = ESCIConfig(
@@ -156,6 +158,7 @@ def main():
         epochs=args.epochs,
         batch_size=args.batch_size,
         entropy_lambda=args.entropy_lambda,
+        softmax_temperature=args.temperature,
     )
     train(config, args.output_dir, max_steps=args.max_steps, max_rows=args.max_rows)
 

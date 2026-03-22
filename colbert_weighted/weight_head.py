@@ -11,10 +11,11 @@ class TokenWeightHead(nn.Module):
     Output: normalized weights  (B, L)
     """
 
-    def __init__(self, hidden_dim: int, norm: str = "softmax"):
+    def __init__(self, hidden_dim: int, norm: str = "softmax", temperature: float = 1.0):
         super().__init__()
         self.linear = nn.Linear(hidden_dim, 1)
         self.norm = norm
+        self.temperature = temperature
         nn.init.zeros_(self.linear.bias)
         nn.init.normal_(self.linear.weight, std=0.02)
 
@@ -29,7 +30,8 @@ class TokenWeightHead(nn.Module):
         logits = self.linear(hidden_states).squeeze(-1)  # (B, L)
 
         if self.norm == "softmax":
-            # Masked softmax
+            # Temperature-scaled masked softmax
+            logits = logits / self.temperature
             logits = logits.masked_fill(~mask, float("-inf"))
             weights = F.softmax(logits, dim=-1)
         elif self.norm == "sigmoid":

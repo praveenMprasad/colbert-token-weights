@@ -24,6 +24,7 @@ class ColBERTESCI(nn.Module):
             self.weight_head = TokenWeightHead(
                 hidden_dim=self.bert.config.hidden_size,
                 norm=config.weight_norm,
+                temperature=config.softmax_temperature,
             )
 
     def encode(self, input_ids, attention_mask):

@@ -25,6 +25,7 @@ class ESCIConfig:
 
     # Entropy regularization (prevents weight collapse)
     entropy_lambda: float = 0.1  # weight for entropy penalty
+    softmax_temperature: float = 1.0  # higher = softer weight distribution
 
     # Data
     dataset: str = "alvations/esci-data-task2"
