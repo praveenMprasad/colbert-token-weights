@@ -88,6 +88,7 @@ def run_weighted(args):
         weight_norm=args.norm,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        entropy_lambda=args.entropy_lambda,
     )
     model = train(config, out, max_steps=args.max_steps, max_rows=args.max_rows)
     return model, config, out
@@ -142,6 +143,7 @@ def main():
     parser.add_argument("--run", required=True,
                         choices=["baseline", "weighted", "eval", "original", "all"])
     parser.add_argument("--norm", default="softmax", choices=["softmax", "sigmoid"])
+    parser.add_argument("--entropy_lambda", type=float, default=0.1)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--max_steps", type=int, default=None)

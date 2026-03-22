@@ -17,11 +17,21 @@ def pairwise_softmax_loss(pos_scores, neg_scores):
     return -F.log_softmax(scores, dim=-1)[:, 0].mean()
 
 
+def weight_entropy(weights, mask):
+    """Compute mean entropy of weight distributions. Higher = more spread out."""
+    # weights: (B, L), mask: (B, L)
+    w = weights.clamp(min=1e-12) * mask.float()
+    entropy = -(w * w.log()).sum(dim=-1)  # (B,)
+    return entropy.mean()
+
+
 def train(config: ESCIConfig, output_dir: str, max_steps: int = None, max_rows: int = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_amp = device.type == "cuda"
     print(f"Device: {device} | fp16: {use_amp}")
     print(f"Weights: {config.use_token_weights} ({config.weight_norm})")
+    if config.use_token_weights:
+        print(f"Entropy regularization: lambda={config.entropy_lambda}")
 
     tokenizer = AutoTokenizer.from_pretrained(config.checkpoint)
     model = ColBERTESCI(config).to(device)
@@ -57,6 +67,11 @@ def train(config: ESCIConfig, output_dir: str, max_steps: int = None, max_rows: 
             with autocast(enabled=use_amp):
                 pos_scores, neg_scores, weights = model(**batch)
                 loss = pairwise_softmax_loss(pos_scores, neg_scores)
+
+                # Entropy regularization: penalize collapsed weights
+                if weights is not None and config.entropy_lambda > 0:
+                    ent = weight_entropy(weights, batch["q_mask"].bool())
+                    loss = loss - config.entropy_lambda * ent  # maximize entropy
 
             scaler.scale(loss).backward()
 
@@ -99,6 +114,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--max_rows", type=int, default=None)
+    parser.add_argument("--entropy_lambda", type=float, default=0.1)
     args = parser.parse_args()
 
     config = ESCIConfig(
@@ -106,6 +122,7 @@ def main():
         weight_norm=args.norm,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        entropy_lambda=args.entropy_lambda,
     )
     train(config, args.output_dir, max_steps=args.max_steps, max_rows=args.max_rows)
 

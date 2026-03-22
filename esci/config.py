@@ -23,6 +23,9 @@ class ESCIConfig:
     accumulation_steps: int = 1
     warmup_ratio: float = 0.1
 
+    # Entropy regularization (prevents weight collapse)
+    entropy_lambda: float = 0.1  # weight for entropy penalty
+
     # Data
     dataset: str = "alvations/esci-data-task2"
     locale: str = "us"  # English only
