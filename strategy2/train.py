@@ -1,9 +1,13 @@
-"""Strategy 2 training: query encoder + weight head, doc encoder frozen."""
+"""Strategy 2 training: query encoder + weight head, doc encoder frozen.
+
+Uses mixed precision (fp16) for ~2x speedup on GPU.
+"""
 import argparse
 import json
 import os
 import torch
 import torch.nn.functional as F
+from torch.cuda.amp import autocast, GradScaler
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from tqdm import tqdm
 
@@ -20,7 +24,8 @@ def pairwise_softmax_loss(pos_scores, neg_scores):
 
 def train(config: S2Config, output_dir: str, max_steps: int = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    use_amp = device.type == "cuda"
+    print(f"Device: {device} | Mixed precision: {use_amp}")
     print(f"Strategy 2: query encoder + weight head train, doc frozen")
     print(f"Weight norm: {config.weight_norm}")
 
@@ -48,6 +53,7 @@ def train(config: S2Config, output_dir: str, max_steps: int = None):
 
     total_steps = max_steps or (len(loader) * config.epochs)
     scheduler = get_linear_schedule_with_warmup(optimizer, config.warmup_steps, total_steps)
+    scaler = GradScaler(enabled=use_amp)
 
     n_encoder = sum(p.numel() for p in encoder_params)
     n_head = sum(p.numel() for p in model.weight_head.parameters())
@@ -62,13 +68,18 @@ def train(config: S2Config, output_dir: str, max_steps: int = None):
         pbar = tqdm(loader, desc=f"Epoch {epoch}")
         for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items()}
-            pos_scores, neg_scores, weights = model(**batch)
-            loss = pairwise_softmax_loss(pos_scores, neg_scores)
 
-            loss.backward()
+            with autocast(enabled=use_amp):
+                pos_scores, neg_scores, weights = model(**batch)
+                loss = pairwise_softmax_loss(pos_scores, neg_scores)
+
+            scaler.scale(loss).backward()
+
             if (step + 1) % config.accumulation_steps == 0:
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 scheduler.step()
                 optimizer.zero_grad()
 
