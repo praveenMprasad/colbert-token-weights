@@ -22,7 +22,7 @@ from .scoring import maxsim, weighted_maxsim
 
 def load_dev_data(max_queries=None, cache_dir=None):
     """Load dev set with positive + negative passages."""
-    ds = load_dataset("Tevatron/msmarco-passage", split="dev", cache_dir=cache_dir)
+    ds = load_dataset("Tevatron/msmarco-passage", split="validation", cache_dir=cache_dir)
     if max_queries:
         ds = ds.select(range(min(max_queries, len(ds))))
     return ds
