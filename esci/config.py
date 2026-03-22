@@ -6,7 +6,7 @@ from typing import Literal
 @dataclass
 class ESCIConfig:
     # Model
-    checkpoint: str = "bert-base-uncased"
+    checkpoint: str = "colbert-ir/colbertv2.0"
     dim: int = 128
     query_maxlen: int = 32
     doc_maxlen: int = 128  # product titles are shorter than passages
