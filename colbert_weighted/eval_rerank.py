@@ -86,8 +86,8 @@ def evaluate_reranking(model, config, device, max_queries=None):
 
     for row in tqdm(dev_data, desc="Evaluating dev set"):
         query = row["query"]
-        pos_docs = [p["text"] for p in row["positive_passages"]]
-        neg_docs = [p["text"] for p in row["negative_passages"]]
+        pos_docs = [p["text"] for p in (row["positive_passages"] or [])]
+        neg_docs = [p["text"] for p in (row["negative_passages"] or [])]
 
         if not pos_docs or not neg_docs:
             continue
