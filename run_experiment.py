@@ -76,6 +76,8 @@ def main():
     parser.add_argument("--output_dir", default="outputs/weighted")
     parser.add_argument("--diagnostics_only", action="store_true",
                         help="Skip training, load saved weight head and run diagnostics")
+    parser.add_argument("--eval_queries", type=int, default=None,
+                        help="Limit dev queries for eval (default: all 6980)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -101,6 +103,21 @@ def main():
                       max_steps=args.max_steps, max_rows=args.max_rows)
 
     run_diagnostics(model, config, args.output_dir, device=str(device))
+
+    # Dev set reranking evaluation: vanilla vs weighted MRR@10
+    from colbert_weighted.eval_rerank import evaluate_reranking
+    print("\n" + "=" * 60)
+    print("Reranking evaluation on dev set")
+    print("=" * 60)
+    model.eval()
+    results = evaluate_reranking(model, config, device, max_queries=args.eval_queries)
+    with open(os.path.join(args.output_dir, "eval_results.json"), "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\n  Vanilla  MRR@10: {results['vanilla_mrr@10']:.4f}")
+    print(f"  Weighted MRR@10: {results['weighted_mrr@10']:.4f}")
+    print(f"  Vanilla  Acc@1:  {results['vanilla_acc@1']:.4f}")
+    print(f"  Weighted Acc@1:  {results['weighted_acc@1']:.4f}")
+    print(f"  Queries evaluated: {results['num_queries']}")
 
 
 if __name__ == "__main__":
