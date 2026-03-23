@@ -129,7 +129,7 @@ def train_gap(config: ESCIConfig, encoder_path: str, output_dir: str,
             log.append({"step": step, "loss": loss.item()})
             pbar.set_postfix(loss=f"{loss.item():.6f}")
 
-            # Monitor weights every 500 steps
+            # Monitor weights + mini eval every 500 steps
             if step % 500 == 0 and step > 0:
                 model.weight_head.eval()
                 print(f"\n  [Step {step}] Weight check:")
@@ -145,6 +145,16 @@ def train_gap(config: ESCIConfig, encoder_path: str, output_dir: str,
                             if mi and t not in ("[CLS]", "[SEP]", "[PAD]"):
                                 parts.append(f"{t}={wi:.3f}")
                         print(f"    {q_text[:40]:40s} → {', '.join(parts)}")
+
+                # Mini eval on 10 queries
+                from .evaluate import evaluate
+                mini_results = evaluate(model, config, device, max_queries=10, split="test")
+                v_mrr = mini_results["vanilla_mrr@10"]
+                w_mrr = mini_results["weighted_mrr@10"]
+                v_attr = mini_results.get("vanilla_attr_mrr@10", 0) or 0
+                w_attr = mini_results.get("weighted_attr_mrr@10", 0) or 0
+                print(f"  Mini eval: vanilla={v_mrr:.4f} weighted={w_mrr:.4f} "
+                      f"v_attr={v_attr:.4f} w_attr={w_attr:.4f}")
                 model.weight_head.train()
 
             step += 1
