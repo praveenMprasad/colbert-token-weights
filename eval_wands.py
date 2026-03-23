@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 
 from esci.config import ESCIConfig
 from esci.model import ColBERTESCI
-from wands.evaluate import evaluate_wands
+from wands.evaluate import evaluate_wands, pruning_eval_wands
 
 SAMPLE_QUERIES = [
     "blue velvet sofa",
@@ -102,6 +102,16 @@ def main():
             print(f"Weighted E>P separation: {results['weighted_separation']:.4f}")
 
     print(f"Queries: {results['num_queries']}")
+
+    # Pruning eval
+    print(f"\n--- Pruning Test (WANDS) ---")
+    prune = pruning_eval_wands(model, config, device,
+                                data_dir=args.data_dir,
+                                max_queries=args.max_queries)
+    if prune:
+        for k, v in prune.items():
+            if v is not None:
+                print(f"  {k}: {v:.4f}")
 
     # Save
     os.makedirs("outputs/wands", exist_ok=True)

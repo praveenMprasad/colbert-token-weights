@@ -224,3 +224,81 @@ def evaluate_wands(model, config, device, data_dir="wands/dataset", max_queries=
         })
 
     return results
+
+
+def pruning_eval_wands(model, config, device, data_dir="wands/dataset",
+                       max_queries=None, ks=(2, 4, 8)):
+    """Pruning eval on WANDS: keep only top-k weighted tokens."""
+    tokenizer = AutoTokenizer.from_pretrained(config.checkpoint)
+    data = load_wands(data_dir)
+    if max_queries:
+        data = data[:max_queries]
+
+    model.eval()
+    if model.weight_head is None:
+        print("No weight head — skipping pruning eval.")
+        return None
+
+    mrr_by_k = {k: [] for k in ks}
+    mrr_by_k["all"] = []
+
+    for item in tqdm(data, desc="WANDS pruning"):
+        query = item["query"]
+        products = item["products"]
+        if len(products) < 2:
+            continue
+
+        q_enc = tokenizer(query, return_tensors="pt", padding="max_length",
+                          truncation=True, max_length=config.query_maxlen).to(device)
+        with torch.no_grad():
+            Q, q_mask, q_hidden = model.encode(q_enc.input_ids, q_enc.attention_mask)
+            weights = model.weight_head(q_hidden, q_mask)
+
+        # Batch encode products
+        titles = [p["title"] for p in products]
+        labels = [p["label"] for p in products]
+        BATCH = 64
+
+        # Precompute per-token MaxSim for all products
+        all_ms = []  # list of (Lq,) per product
+        for start in range(0, len(titles), BATCH):
+            batch_titles = titles[start:start + BATCH]
+            d_enc = tokenizer(batch_titles, return_tensors="pt", padding="max_length",
+                              truncation=True, max_length=config.doc_maxlen).to(device)
+            with torch.no_grad():
+                D, d_mask, _ = model.encode(d_enc.input_ids, d_enc.attention_mask)
+                bsz = D.size(0)
+                Q_exp = Q.expand(bsz, -1, -1)
+                sim = torch.bmm(Q_exp, D.transpose(1, 2))
+                sim = sim.masked_fill(~d_mask.unsqueeze(1), float("-inf"))
+                ms, _ = sim.max(dim=-1)  # (bsz, Lq)
+                for i in range(bsz):
+                    all_ms.append(ms[i].cpu())
+
+        for k in list(ks) + [None]:
+            if k is not None:
+                _, topk_idx = weights[0].topk(min(k, int(q_mask.sum())))
+                pruned_mask = torch.zeros_like(q_mask)
+                pruned_mask[0, topk_idx] = 1
+                pruned_mask = pruned_mask.bool()
+            else:
+                pruned_mask = q_mask.clone()
+
+            w_pruned = weights * pruned_mask.float()
+            denom = w_pruned.sum(dim=-1, keepdim=True).clamp(min=1e-9)
+            w_pruned = w_pruned / denom
+
+            scores = []
+            for ms_i in all_ms:
+                s = (ms_i.to(device) * w_pruned[0]).sum().item()
+                scores.append(s)
+
+            order = np.argsort(scores)[::-1]
+            ranked_labels = [labels[i] for i in order]
+            key = k if k is not None else "all"
+            mrr_by_k[key].append(mrr_at_k(ranked_labels))
+
+    results = {}
+    for k, vals in mrr_by_k.items():
+        results[f"mrr@10_top{k}"] = float(np.mean(vals)) if vals else None
+    return results
