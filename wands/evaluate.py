@@ -125,16 +125,39 @@ def evaluate_wands(model, config, device, data_dir="wands/dataset", max_queries=
         with torch.no_grad():
             Q, q_mask, q_hidden = model.encode(q_enc.input_ids, q_enc.attention_mask)
 
+        # Batch encode all products for this query
+        titles = [p["title"] for p in products]
+        BATCH = 64
         v_scores, w_scores = [], []
-        for prod in products:
-            d_enc = tokenizer(prod["title"], return_tensors="pt", padding="max_length",
+        weights = None
+        if has_weights:
+            with torch.no_grad():
+                weights = model.weight_head(q_hidden, q_mask)
+
+        for start in range(0, len(titles), BATCH):
+            batch_titles = titles[start:start + BATCH]
+            d_enc = tokenizer(batch_titles, return_tensors="pt", padding="max_length",
                               truncation=True, max_length=config.doc_maxlen).to(device)
             with torch.no_grad():
                 D, d_mask, _ = model.encode(d_enc.input_ids, d_enc.attention_mask)
-                v_scores.append(maxsim(Q, D, q_mask, d_mask).item())
-                if has_weights:
-                    weights = model.weight_head(q_hidden, q_mask)
-                    w_scores.append(weighted_maxsim(Q, D, q_mask, d_mask, weights).item())
+                # Expand Q for batch: (1, Lq, dim) -> (batch, Lq, dim)
+                bsz = D.size(0)
+                Q_exp = Q.expand(bsz, -1, -1)
+                q_mask_exp = q_mask.expand(bsz, -1)
+
+                # Vanilla scores
+                sim = torch.bmm(Q_exp, D.transpose(1, 2))
+                sim = sim.masked_fill(~d_mask.unsqueeze(1), float("-inf"))
+                ms, _ = sim.max(dim=-1)
+                ms = ms * q_mask_exp.float()
+                v_batch = ms.sum(dim=-1).cpu().tolist()
+                v_scores.extend(v_batch)
+
+                # Weighted scores
+                if weights is not None:
+                    w_exp = weights.expand(bsz, -1)
+                    w_batch = (ms * w_exp).sum(dim=-1).cpu().tolist()
+                    w_scores.extend(w_batch)
 
         # Vanilla ranking
         v_order = np.argsort(v_scores)[::-1]
