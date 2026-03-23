@@ -25,6 +25,8 @@ SAMPLE_QUERIES = [
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", default="outputs/esci/gap_weighted/model.pt")
+    parser.add_argument("--weight_head_path", default=None,
+                        help="Override weight head from a specific checkpoint")
     parser.add_argument("--num_eval", type=int, default=50)
     parser.add_argument("--temperature", type=float, default=0.3)
     args = parser.parse_args()
@@ -39,6 +41,9 @@ def main():
 
     model = ColBERTESCI(config).to(device)
     model.load_state_dict(torch.load(args.model_path, map_location=device))
+    if args.weight_head_path:
+        print(f"Overriding weight head from: {args.weight_head_path}")
+        model.weight_head.load_state_dict(torch.load(args.weight_head_path, map_location=device))
     model.eval()
 
     # Token weight inspection
