@@ -19,7 +19,7 @@ from .data import get_dataloader
 from colbert_weighted.scoring import maxsim
 
 
-def compute_token_gaps(Q, D_pos, D_neg, q_mask, d_pos_mask, d_neg_mask):
+def compute_token_gaps(Q, D_pos, D_neg, q_mask, d_pos_mask, d_neg_mask, temperature=0.1):
     """Compute per-token MaxSim gap: how much better each query token matches pos vs neg.
 
     Returns: (B, L) normalized gap weights (softmax over gaps).
@@ -38,9 +38,9 @@ def compute_token_gaps(Q, D_pos, D_neg, q_mask, d_pos_mask, d_neg_mask):
     gaps = (max_sim_pos - max_sim_neg)  # (B, Lq)
     gaps = gaps * q_mask.float()  # zero out padding
 
-    # Normalize to get target weights (softmax with temperature for smoother targets)
+    # Normalize to get target weights (softmax with temperature for sharper targets)
     gaps = gaps.masked_fill(~q_mask, float("-inf"))
-    target_weights = F.softmax(gaps / 0.5, dim=-1)  # temperature=0.5 for moderate spread
+    target_weights = F.softmax(gaps / temperature, dim=-1)  # lower temp = sharper targets
 
     return target_weights, gaps
 
@@ -113,7 +113,8 @@ def train_gap(config: ESCIConfig, encoder_path: str, output_dir: str,
 
                 # Compute target weights from MaxSim gaps
                 target_weights, gaps = compute_token_gaps(
-                    Q, D_pos, D_neg, q_mask.bool(), d_pos_mask.bool(), d_neg_mask.bool())
+                    Q, D_pos, D_neg, q_mask.bool(), d_pos_mask.bool(), d_neg_mask.bool(),
+                    temperature=config.softmax_temperature)
 
             # Forward through weight head (only this has gradients)
             q_hidden = q_hidden.detach().requires_grad_(True)
@@ -181,6 +182,7 @@ def main():
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--max_rows", type=int, default=None)
     parser.add_argument("--num_eval", type=int, default=1000)
+    parser.add_argument("--gap_temperature", type=float, default=0.1)
     args = parser.parse_args()
 
     config = ESCIConfig(
@@ -189,6 +191,7 @@ def main():
         epochs=args.epochs,
         batch_size=args.batch_size,
         entropy_lambda=0.0,
+        softmax_temperature=args.gap_temperature,
     )
 
     model = train_gap(config, args.encoder_path, args.output_dir,
