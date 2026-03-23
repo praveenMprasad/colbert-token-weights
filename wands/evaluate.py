@@ -58,24 +58,24 @@ def ndcg_at_k(ranked_labels, k=10):
 
 def load_wands(data_dir="wands/dataset"):
     """Load WANDS CSV files into query-product groups."""
-    # Load products
+    # Load products (TSV)
     products = {}
     with open(os.path.join(data_dir, "product.csv"), "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
             products[row["product_id"]] = row["product_name"]
 
-    # Load queries
+    # Load queries (TSV)
     queries = {}
     with open(os.path.join(data_dir, "query.csv"), "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
             queries[row["query_id"]] = row["query"]
 
-    # Load labels and group by query
+    # Load labels and group by query (TSV)
     query_products = defaultdict(list)
     with open(os.path.join(data_dir, "label.csv"), "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
             qid = row["query_id"]
             pid = row["product_id"]
