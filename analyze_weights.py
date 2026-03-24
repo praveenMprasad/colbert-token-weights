@@ -304,11 +304,84 @@ def main():
         top_cat_counts[cat] = top_cat_counts.get(cat, 0) + 1
 
     total = sum(top_cat_counts.values())
+    print(f"\n  All queries ({total}):")
     for cat in ["modifier", "head_noun", "number", "function", "subword"]:
         c = top_cat_counts.get(cat, 0)
         pct = c / total * 100 if total else 0
         bar = "█" * int(pct / 2)
-        print(f"  {cat:<15} {c:4d} queries ({pct:5.1f}%)  {bar}")
+        print(f"    {cat:<15} {c:4d} queries ({pct:5.1f}%)  {bar}")
+
+    # Split by what categories are present in the query
+    def get_present_cats(tokens):
+        return set(t["category"] for t in tokens)
+
+    # Queries with modifiers AND head nouns (no numbers)
+    mod_head_only = [q for q in all_query_data if q["tokens"] and
+                     {"modifier", "head_noun"}.issubset(get_present_cats(q["tokens"])) and
+                     "number" not in get_present_cats(q["tokens"])]
+    if mod_head_only:
+        counts = {"modifier": 0, "head_noun": 0, "function": 0, "subword": 0}
+        for q in mod_head_only:
+            top = max(q["tokens"], key=lambda x: x["weight"])
+            counts[top["category"]] = counts.get(top["category"], 0) + 1
+        n = len(mod_head_only)
+        print(f"\n  Queries with BOTH modifier + head noun, NO numbers ({n}):")
+        for cat in ["modifier", "head_noun", "function", "subword"]:
+            c = counts.get(cat, 0)
+            pct = c / n * 100 if n else 0
+            bar = "█" * int(pct / 2)
+            print(f"    {cat:<15} {c:4d} queries ({pct:5.1f}%)  {bar}")
+
+    # Queries with numbers AND modifiers AND head nouns
+    all_three = [q for q in all_query_data if q["tokens"] and
+                 {"modifier", "head_noun", "number"}.issubset(get_present_cats(q["tokens"]))]
+    if all_three:
+        counts = {"modifier": 0, "head_noun": 0, "number": 0, "function": 0, "subword": 0}
+        for q in all_three:
+            top = max(q["tokens"], key=lambda x: x["weight"])
+            counts[top["category"]] = counts.get(top["category"], 0) + 1
+        n = len(all_three)
+        print(f"\n  Queries with modifier + head noun + number ({n}):")
+        for cat in ["number", "modifier", "head_noun", "function", "subword"]:
+            c = counts.get(cat, 0)
+            pct = c / n * 100 if n else 0
+            bar = "█" * int(pct / 2)
+            print(f"    {cat:<15} {c:4d} queries ({pct:5.1f}%)  {bar}")
+
+    # Queries with ONLY head nouns (no modifiers, no numbers)
+    head_only = [q for q in all_query_data if q["tokens"] and
+                 "head_noun" in get_present_cats(q["tokens"]) and
+                 "modifier" not in get_present_cats(q["tokens"]) and
+                 "number" not in get_present_cats(q["tokens"])]
+    if head_only:
+        print(f"\n  Queries with ONLY head nouns, no modifiers/numbers ({len(head_only)}):")
+        counts = {}
+        for q in head_only:
+            top = max(q["tokens"], key=lambda x: x["weight"])
+            counts[top["category"]] = counts.get(top["category"], 0) + 1
+        for cat, c in sorted(counts.items(), key=lambda x: -x[1]):
+            print(f"    {cat:<15} {c:4d}")
+
+    # Where head_noun won — did the query have modifiers?
+    head_won = [q for q in all_query_data if q["tokens"] and
+                max(q["tokens"], key=lambda x: x["weight"])["category"] == "head_noun"]
+    if head_won:
+        has_mod = sum(1 for q in head_won if "modifier" in get_present_cats(q["tokens"]))
+        no_mod = len(head_won) - has_mod
+        print(f"\n  Queries where HEAD NOUN had highest weight ({len(head_won)}):")
+        print(f"    Had modifiers present:     {has_mod} ({has_mod/len(head_won)*100:.0f}%)")
+        print(f"    No modifiers present:      {no_mod} ({no_mod/len(head_won)*100:.0f}%)")
+        if has_mod > 0:
+            print(f"    Examples where head beat modifiers:")
+            shown = 0
+            for q in head_won:
+                if "modifier" in get_present_cats(q["tokens"]):
+                    toks = " | ".join(f"{t['token']}({t['category'][0]})={t['weight']:.3f}"
+                                       for t in q["tokens"])
+                    print(f"      \"{q['query']}\" → {toks}")
+                    shown += 1
+                    if shown >= 5:
+                        break
 
     # Per-query weight entropy (peakedness)
     print(f"\n{'=' * 75}")
