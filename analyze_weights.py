@@ -385,6 +385,78 @@ def main():
         print(f"  Generic queries:    entropy={np.mean(generic_entropies):.4f} (n={len(generic_entropies)})")
     print(f"  (Lower = more peaked = model more confident)")
 
+    # Discriminator analysis: for queries where modifier won,
+    # show the high-weight modifier and whether it distinguishes Exact from Substitute
+    print(f"\n{'=' * 75}")
+    print("Modifier Discriminator Analysis")
+    print("Queries where top-weighted modifier is the discriminating token")
+    print(f"{'=' * 75}")
+
+    if args.dataset == "esci":
+        rerank_items = list(ESCIRerankDataset(split="test", locale="us", max_queries=1000))
+        query_to_products = {item["query"]: item["products"] for item in rerank_items}
+    else:
+        from wands.evaluate import load_wands
+        wands_items = load_wands(args.data_dir)
+        query_to_products = {}
+        for item in wands_items:
+            query_to_products[item["query"]] = item["products"]
+
+    discriminator_count = 0
+    non_discriminator_count = 0
+    shown = 0
+
+    for qdata in all_query_data:
+        if not qdata["tokens"]:
+            continue
+        top_tok = max(qdata["tokens"], key=lambda x: x["weight"])
+        if top_tok["category"] != "modifier":
+            continue
+
+        query = qdata["query"]
+        products = query_to_products.get(query, [])
+        if len(products) < 2:
+            continue
+
+        mod_token = top_tok["token"].lower().replace("##", "")
+
+        # Check: does this modifier appear more in Exact titles than Substitute/Partial?
+        if args.dataset == "esci":
+            exact_titles = [p["title"].lower() for p in products if p["esci_label"] == "E"]
+            sub_titles = [p["title"].lower() for p in products if p["esci_label"] == "S"]
+        else:
+            exact_titles = [p["title"].lower() for p in products if p["label"] == 2]
+            sub_titles = [p["title"].lower() for p in products if p["label"] == 1]
+
+        if not exact_titles or not sub_titles:
+            continue
+
+        exact_has = sum(1 for t in exact_titles if mod_token in t) / len(exact_titles)
+        sub_has = sum(1 for t in sub_titles if mod_token in t) / len(sub_titles)
+
+        is_discriminator = exact_has > sub_has
+        if is_discriminator:
+            discriminator_count += 1
+        else:
+            non_discriminator_count += 1
+
+        if shown < 15:
+            marker = "✓ DISC" if is_discriminator else "✗ not disc"
+            toks = " | ".join(f"{t['token']}({t['category'][0]})={t['weight']:.3f}"
+                               for t in qdata["tokens"])
+            print(f"\n  \"{query}\"")
+            print(f"    Top modifier: \"{mod_token}\" (w={top_tok['weight']:.3f})")
+            print(f"    In Exact titles: {exact_has*100:.0f}% ({len(exact_titles)} titles)")
+            print(f"    In Substitute titles: {sub_has*100:.0f}% ({len(sub_titles)} titles)")
+            print(f"    → {marker}")
+            shown += 1
+
+    total_checked = discriminator_count + non_discriminator_count
+    if total_checked > 0:
+        print(f"\n  Summary ({total_checked} queries with modifier as top weight):")
+        print(f"    Modifier IS discriminator (more in Exact): {discriminator_count} ({discriminator_count/total_checked*100:.0f}%)")
+        print(f"    Modifier NOT discriminator:                {non_discriminator_count} ({non_discriminator_count/total_checked*100:.0f}%)")
+
     out_path = f"results/weight_analysis_{args.dataset}.json"
     with open(out_path, "w") as f:
         json.dump({
