@@ -138,15 +138,35 @@ def main():
         "organic green tea bags",
     }
 
-    # Batch POS tag all queries
-    print("Running Comprehend POS tagging...")
-    all_pos_maps = comprehend_pos_batch(all_queries)
+    # Check for cached syntax
+    syntax_cache_path = "results/comprehend_syntax_cache.json"
+    import os
+    if os.path.exists(syntax_cache_path):
+        print(f"Loading cached Comprehend syntax from {syntax_cache_path}")
+        with open(syntax_cache_path) as f:
+            cache = json.load(f)
+        all_pos_maps = cache["pos_maps"]
+        all_head_nouns = [set(hn) for hn in cache["head_nouns"]]
+    else:
+        # Batch POS tag all queries
+        print("Running Comprehend POS tagging...")
+        all_pos_maps = comprehend_pos_batch(all_queries)
 
-    # Get head nouns for all queries (individual calls for syntax parse)
-    print("Finding head nouns...")
-    all_head_nouns = []
-    for q in tqdm(all_queries, desc="Head noun detection"):
-        all_head_nouns.append(find_head_nouns(all_pos_maps[len(all_head_nouns)], q))
+        # Get head nouns for all queries
+        print("Finding head nouns...")
+        all_head_nouns = []
+        for q in tqdm(all_queries, desc="Head noun detection"):
+            all_head_nouns.append(find_head_nouns(all_pos_maps[len(all_head_nouns)], q))
+
+        # Save cache
+        with open(syntax_cache_path, "w") as f:
+            json.dump({
+                "num_queries": len(all_queries),
+                "queries": all_queries,
+                "pos_maps": all_pos_maps,
+                "head_nouns": [list(hn) for hn in all_head_nouns],
+            }, f, indent=2)
+        print(f"Saved Comprehend syntax cache to {syntax_cache_path}")
 
     # Run weight head on all queries
     print("Computing weights...")
