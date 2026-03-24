@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Weight distribution analysis with POS-based token categorization.
+"""Weight distribution analysis with AWS Comprehend POS tagging.
+
+Runs on ALL ESCI test queries for aggregate stats.
+Shows detailed per-query output for a curated sample.
 
 Categories:
-  - Head noun: core subject of the query (last noun in noun phrase, product type)
-  - Modifier: adjectives, adverbs, attributes that narrow the search
-  - Function: stopwords, prepositions, determiners, punctuation
+  - Head noun: core product/subject (last noun(s) in main phrase)
+  - Modifier: adjectives, adverbs, attributes, pre-head nouns
+  - Function: determiners, prepositions, conjunctions, punctuation
   - Subword: wordpiece continuations (##xyz)
   - Number: numeric tokens
 """
@@ -12,110 +15,85 @@ import torch
 import numpy as np
 import json
 import re
-import nltk
+import boto3
 from transformers import AutoTokenizer
+from tqdm import tqdm
 from esci.config import ESCIConfig
 from esci.model import ColBERTESCI
+from esci.data import ESCIRerankDataset
 
-nltk.download("averaged_perceptron_tagger_eng", quiet=True)
-nltk.download("punkt_tab", quiet=True)
+comprehend = boto3.client("comprehend", region_name="us-east-1")
 
 STOPWORDS = {"the", "a", "an", "for", "with", "in", "of", "to", "and", "or",
              "on", "at", "by", "from", "is", "it", "that", "this", "as", "be",
              "'s", "'", "s"}
 
-# POS tags → category mapping
-# NN/NNS/NNP = nouns, JJ/JJR/JJS = adjectives, RB = adverbs
-# VBG can be modifier ("running shoes") or head ("running")
-MODIFIER_POS = {"JJ", "JJR", "JJS", "RB", "RBR", "RBS", "VBG", "VBN", "CD"}
-NOUN_POS = {"NN", "NNS", "NNP", "NNPS"}
-FUNCTION_POS = {"IN", "DT", "CC", "TO", "PRP", "PRP$", "WDT", "WP", "EX",
-                "MD", "POS", "RP"}
+MODIFIER_POS = {"ADJ", "ADV", "VERB"}
+NOUN_POS = {"NOUN", "PROPN"}
+FUNCTION_POS = {"ADP", "DET", "CONJ", "CCONJ", "SCONJ", "PART", "PRON",
+                "AUX", "INTJ", "PUNCT"}
+
+# Batch Comprehend: up to 25 texts per call
+COMPREHEND_BATCH = 25
 
 
-def get_query_pos_tags(query):
-    """POS tag a query and return {word: pos} mapping."""
-    words = nltk.word_tokenize(query)
-    tagged = nltk.pos_tag(words)
-    return {w.lower(): pos for w, pos in tagged}
+def comprehend_pos_batch(queries):
+    """Batch POS tagging via Comprehend. Returns list of {word: pos} dicts."""
+    results = []
+    for i in range(0, len(queries), COMPREHEND_BATCH):
+        batch = queries[i:i + COMPREHEND_BATCH]
+        resp = comprehend.batch_detect_syntax(
+            TextList=batch, LanguageCode="en")
+        for item in resp["ResultList"]:
+            pos_map = {}
+            for token in item["SyntaxTokens"]:
+                pos_map[token["Text"].lower()] = token["PartOfSpeech"]["Tag"]
+            results.append(pos_map)
+    return results
 
 
-def find_head_nouns(query):
-    """Identify head nouns — the core product/subject tokens.
-    
-    Heuristic: the last noun(s) before a preposition or end of query.
-    E.g., "men's black leather jacket" → jacket is head noun
-          "running shoes for girls" → shoes is head noun
-          "stainless steel kitchen knife set" → knife, set are head nouns
-    """
-    words = nltk.word_tokenize(query)
-    tagged = nltk.pos_tag(words)
-    
+def find_head_nouns(pos_map, query):
+    """Head noun = last noun(s) in main phrase (before preposition)."""
+    resp = comprehend.detect_syntax(Text=query, LanguageCode="en")
+    tokens = resp["SyntaxTokens"]
+
+    main_tokens = []
+    for t in tokens:
+        if t["PartOfSpeech"]["Tag"] == "ADP":
+            break
+        main_tokens.append(t)
+
+    if not main_tokens:
+        main_tokens = tokens
+
     head_nouns = set()
-    # Walk backwards, first noun(s) from the end (before any prep phrase)
-    # Split on prepositions to find main noun phrase
-    chunks = []
-    current = []
-    for w, pos in tagged:
-        if pos in ("IN", "TO") and current:
-            chunks.append(current)
-            current = []
-        else:
-            current.append((w, pos))
-    if current:
-        chunks.append(current)
-    
-    # Main chunk is the first one (before any "for X" / "in X")
-    main_chunk = chunks[0] if chunks else tagged
-    
-    # Head noun = last noun in main chunk
-    for w, pos in reversed(main_chunk):
-        if pos in NOUN_POS:
-            head_nouns.add(w.lower())
+    for t in reversed(main_tokens):
+        pos = t["PartOfSpeech"]["Tag"]
+        if pos in ("NOUN", "PROPN"):
+            head_nouns.add(t["Text"].lower())
+        elif head_nouns:
             break
-    
-    # If query is like "knife set", both are head nouns
-    # Check if last 2 tokens are both nouns
-    nouns_at_end = []
-    for w, pos in reversed(main_chunk):
-        if pos in NOUN_POS:
-            nouns_at_end.append(w.lower())
-        else:
-            break
-    if len(nouns_at_end) >= 2:
-        head_nouns.update(nouns_at_end)
-    
+
     return head_nouns
 
 
-def categorize_token_pos(token_text, query, pos_map, head_nouns):
-    """Categorize using POS tags + head noun detection."""
+def categorize_token(token_text, pos_map, head_nouns):
     if token_text.startswith("##"):
         return "subword"
-    
     t = token_text.lower()
-    
-    if t in STOPWORDS or t in ("'", "s", "'s"):
+    if t in STOPWORDS:
         return "function"
-    
     if re.match(r"^\d+$", t):
         return "number"
-    
-    # Check if it's a head noun
     if t in head_nouns:
         return "head_noun"
-    
-    # Use POS tag
     pos = pos_map.get(t, "")
     if pos in MODIFIER_POS:
         return "modifier"
     if pos in NOUN_POS:
-        # Noun but not head → it's a modifier noun (e.g., "leather" in "leather jacket")
-        return "modifier"
+        return "modifier"  # pre-head noun = modifier
     if pos in FUNCTION_POS:
         return "function"
-    
-    # Default: if it's before the head noun, it's a modifier
     return "modifier"
 
 
@@ -136,43 +114,52 @@ def main():
                     map_location=device))
     model.eval()
 
-    SAMPLE_QUERIES = [
-        # Attribute-heavy
+    # Load all test queries
+    rerank_data = list(ESCIRerankDataset(split="test", locale="us", max_queries=1000))
+    all_queries = [item["query"] for item in rerank_data]
+    print(f"Loaded {len(all_queries)} queries")
+
+    # Sample queries for detailed output
+    SHOW_QUERIES = {
         "men's black leather jacket",
         "women's red silk dress size 8",
         "blue velvet sofa",
         "large wooden dining table",
         "gold metal wall mirror",
         "boys white cotton shirt",
-        "small ceramic flower pot",
         "pink running shoes for girls",
-        # Generic
         "laptop stand",
         "wireless headphones",
         "coffee table",
-        "phone case",
-        "yoga mat",
-        "desk lamp",
         "water bottle for gym",
-        "birthday gift for mom",
-        # Mixed
         "stainless steel kitchen knife set",
         "queen size grey bed sheets",
         "men's waterproof hiking boots brown",
         "organic green tea bags",
-    ]
+    }
 
-    category_weights = {"head_noun": [], "modifier": [], "function": [],
-                        "subword": [], "number": []}
+    # Batch POS tag all queries
+    print("Running Comprehend POS tagging...")
+    all_pos_maps = comprehend_pos_batch(all_queries)
+
+    # Get head nouns for all queries (individual calls for syntax parse)
+    print("Finding head nouns...")
+    all_head_nouns = []
+    for q in tqdm(all_queries, desc="Head noun detection"):
+        all_head_nouns.append(find_head_nouns(all_pos_maps[len(all_head_nouns)], q))
+
+    # Run weight head on all queries
+    print("Computing weights...")
+    category_weights = {}
     all_query_data = []
 
-    print("=" * 75)
-    print("Token Weight Analysis — Head Nouns vs Modifiers vs Function Words")
+    print("\n" + "=" * 75)
+    print("Token Weight Analysis — Comprehend POS (all 1000 queries)")
     print("=" * 75)
 
-    for query in SAMPLE_QUERIES:
-        pos_map = get_query_pos_tags(query)
-        head_nouns = find_head_nouns(query)
+    for idx, query in enumerate(tqdm(all_queries, desc="Weight analysis")):
+        pos_map = all_pos_maps[idx]
+        head_nouns = all_head_nouns[idx]
 
         enc = tokenizer(query, return_tensors="pt", padding="max_length",
                         truncation=True, max_length=config.query_maxlen).to(device)
@@ -184,19 +171,23 @@ def main():
         tokens = tokenizer.convert_ids_to_tokens(enc.input_ids[0])
         mask = q_mask[0].cpu().numpy()
 
-        print(f"\nQuery: \"{query}\"")
-        print(f"  Head nouns: {head_nouns}")
-        print(f"  {'Token':<15} {'Category':<12} {'Weight':<8} {'Bar'}")
-        print(f"  {'-'*60}")
+        show = query in SHOW_QUERIES
+        if show:
+            print(f"\nQuery: \"{query}\"")
+            print(f"  POS: {pos_map}")
+            print(f"  Head nouns: {head_nouns}")
+            print(f"  {'Token':<15} {'Category':<12} {'Weight':<8} {'Bar'}")
+            print(f"  {'-'*60}")
 
         query_tokens = []
         for t, w, m in zip(tokens, weights, mask):
             if not m or t in ("[CLS]", "[SEP]", "[PAD]", "[Q]", "[MASK]"):
                 continue
-            cat = categorize_token_pos(t, query, pos_map, head_nouns)
-            bar = "█" * int(w * 200)
-            marker = " ◄HEAD" if cat == "head_noun" else ""
-            print(f"  {t:<15} {cat:<12} {w:.4f}   {bar}{marker}")
+            cat = categorize_token(t, pos_map, head_nouns)
+            if show:
+                bar = "█" * int(w * 200)
+                marker = " ◄HEAD" if cat == "head_noun" else ""
+                print(f"  {t:<15} {cat:<12} {w:.4f}   {bar}{marker}")
 
             query_tokens.append({"token": t, "category": cat, "weight": float(w)})
             category_weights.setdefault(cat, []).append(float(w))
@@ -206,7 +197,7 @@ def main():
 
     # Aggregate
     print(f"\n{'=' * 75}")
-    print("Aggregate: Average Weight by Token Role")
+    print(f"Aggregate: Average Weight by Token Role ({len(all_queries)} queries)")
     print(f"{'=' * 75}")
     print(f"\n  {'Role':<15} {'Avg Weight':<12} {'Count':<8} {'Std':<8} {'Bar'}")
     print(f"  {'-'*60}")
@@ -221,10 +212,11 @@ def main():
         bar = "█" * int(avg * 200)
         print(f"  {cat:<15} {avg:.4f}       {len(ws):<8} {std:.4f}   {bar}")
 
-    # Summary comparison
+    # Summary
     mod_w = category_weights.get("modifier", [])
     head_w = category_weights.get("head_noun", [])
-    func_w = category_weights.get("function", []) + category_weights.get("subword", [])
+    func_w = (category_weights.get("function", []) +
+              category_weights.get("subword", []))
 
     print(f"\n{'=' * 75}")
     print("Summary")
@@ -243,9 +235,9 @@ def main():
     if mod_w and head_w:
         print(f"  Modifier / Head noun ratio: {np.mean(mod_w) / np.mean(head_w):.2f}x")
 
-    # Save
     with open("results/weight_analysis.json", "w") as f:
         json.dump({
+            "num_queries": len(all_queries),
             "queries": all_query_data,
             "category_stats": {cat: {"mean": float(np.mean(ws)), "std": float(np.std(ws)),
                                       "count": len(ws)}
