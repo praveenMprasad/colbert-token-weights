@@ -404,6 +404,7 @@ def main():
 
     discriminator_count = 0
     non_discriminator_count = 0
+    skipped_noisy = 0
     shown = 0
 
     for qdata in all_query_data:
@@ -419,6 +420,18 @@ def main():
             continue
 
         mod_token = top_tok["token"].lower().replace("##", "")
+
+        # Skip noisy queries: special chars, subword fragments as top modifier
+        if top_tok["token"].startswith("##"):
+            skipped_noisy += 1
+            continue
+        if len(mod_token) <= 1:
+            skipped_noisy += 1
+            continue
+        # Skip queries starting with special characters
+        if query and not query[0].isalnum():
+            skipped_noisy += 1
+            continue
 
         # Check: does this modifier appear more in Exact titles than Substitute/Partial?
         if args.dataset == "esci":
@@ -453,7 +466,7 @@ def main():
 
     total_checked = discriminator_count + non_discriminator_count
     if total_checked > 0:
-        print(f"\n  Summary ({total_checked} queries with modifier as top weight):")
+        print(f"\n  Summary ({total_checked} clean queries with modifier as top weight, {skipped_noisy} noisy skipped):")
         print(f"    Modifier IS discriminator (more in Exact): {discriminator_count} ({discriminator_count/total_checked*100:.0f}%)")
         print(f"    Modifier NOT discriminator:                {non_discriminator_count} ({non_discriminator_count/total_checked*100:.0f}%)")
 
